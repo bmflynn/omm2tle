@@ -1,0 +1,456 @@
+#!/usr/bin/env python3
+"""Convert CCSDS Orbital Mean Message (OMM) XML to Two-Line Element (TLE) format.
+
+See https://public.ccsds.org/Pubs/502x0b2c3.pdf for the OMM specification.
+"""
+
+import string
+import sys
+from datetime import datetime
+from xml.etree import ElementTree
+
+if sys.version_info < (3, 6):
+    print("This script requires Python 3.6 or later", file=sys.stderr)
+    sys.exit(1)
+
+
+def parse_timestamp(v):
+    """Parse a timestamp string in format required by OMM spec.
+
+    Parameters:
+        v: The timestamp string.
+
+    Returns:
+        A datetime object.
+
+    Raises:
+        ValueError:
+            If the timestamp string is not in a supported format.
+    """
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%dT%H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%jT%H:%M:%S.%fZ",
+        "%Y-%jT%H:%M:%S.%f",
+        "%Y-%jT%H:%M:%SZ",
+        "%Y-%jT%H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(v, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"could not create datetime from {v!r}")
+
+
+TLE_TAGS = (
+    ("OBJECT_NAME", str),
+    ("EPOCH", parse_timestamp),
+    ("MEAN_MOTION_DOT", float),
+    ("NORAD_CAT_ID", int),
+    ("CLASSIFICATION_TYPE", str),
+    ("OBJECT_ID", str),
+    ("MEAN_MOTION_DDOT", float),
+    ("BSTAR", float),
+    ("EPHEMERIS_TYPE", int),
+    ("ELEMENT_SET_NO", int),
+    ("INCLINATION", float),
+    ("RA_OF_ASC_NODE", float),
+    ("ECCENTRICITY", float),
+    ("ARG_OF_PERICENTER", float),
+    ("MEAN_ANOMALY", float),
+    ("MEAN_MOTION", float),
+    ("REV_AT_EPOCH", int),
+)
+
+
+def parse_xml(doc):
+    """Parse OMM data from OMM XML or NDM XML containing one or more OMMs.
+
+    Parameters:
+        doc: The OMM XML document with root element "omm" or "ndm".
+
+    Returns:
+        List of dicts of OMM data.
+
+    Raises:
+        ValueError:
+            If the XML document is missing required fields.
+    """
+    root = ElementTree.fromstring(doc)
+    omm_elems = [root] if root.tag == "omm" else root.findall(".//omm")
+    omms = []
+    for omm_elem in omm_elems:
+        data = {
+            "CCSDS_OMM_VERS": omm_elem.attrib.get("CCSDS_OMM_VERS", None),
+        }
+        for tag_name, typfcn in TLE_TAGS:
+            val = omm_elem.find(".//%s" % tag_name)
+            if val is None:
+                raise ValueError("Missing required tag %s in OMM XML" % tag_name)
+            data[tag_name] = typfcn(val.text) if val is not None else None
+        omms.append(data)
+
+    return omms
+
+
+def compute_csum(line):
+    """Compute a TLE line checksum value.
+
+    See here for documentation: http://celestrak.com/columns/v04n03
+
+    Parameters:
+        line:
+            Complete TLE line1 or line2. Only up to the first 68 chars of line
+            are used to compute the csum.
+
+    Returns:
+        The int csum value
+    """
+    csum = sum(c == "-" and 1 or int(c) for c in line[:68] if c.isdigit() or c == "-")
+    return int(str(csum % 10)[0])
+
+
+def convert_to_tle(omm: dict, include_title=True):
+    """Return the TLE representation of this OMM XML document.
+
+    Parameters:
+        doc: The OMM XML document with root element "omm".
+        include_title: If True, include the object name as the first line (e.g., 3LE format).
+
+    Raises:
+        ValueError:
+            If the NORAD catalog number is too large to be represented in TLE format or
+            if the XML document is missing required fields.
+    """
+    epoch = omm["EPOCH"]
+    day = float(
+        epoch.strftime("%j")
+        + str(
+            (epoch - datetime(epoch.year, epoch.month, epoch.day)).total_seconds()
+            / 86400
+        ).replace("0.", ".")
+    )
+    mm_dot = f"{omm['MEAN_MOTION_DOT']:.8f}".replace("0.", ".")
+    catid = catalog_alpha5(omm["NORAD_CAT_ID"])
+    line1 = (
+        "1 "
+        f"{catid:5s}{omm['CLASSIFICATION_TYPE']} "
+        f"{omm['OBJECT_ID'][2:].replace('-', ''):<8s} "
+        f"{epoch.strftime('%y')}{day:012.8f} "
+        f"{mm_dot:>10s} "
+        f"{fortran_format(omm['MEAN_MOTION_DDOT']):>8s} "
+        f"{fortran_format(omm['BSTAR']):>8s} "
+        f"{omm['EPHEMERIS_TYPE']} "
+        f"{omm['ELEMENT_SET_NO']:4d}"
+    )
+    line2 = (
+        "2 "
+        f"{catid:5s} "
+        f"{omm['INCLINATION']:8.4f} "
+        f"{omm['RA_OF_ASC_NODE']:8.4f} "
+        f"{int(round(omm['ECCENTRICITY'], 7) * 1e7):07d} "
+        f"{omm['ARG_OF_PERICENTER']:8.4f} "
+        f"{omm['MEAN_ANOMALY']:8.4f} "
+        f"{omm['MEAN_MOTION']:11.8f}"
+        f"{omm['REV_AT_EPOCH']:5d}"
+    )
+    tle = (
+        f"{line1}{compute_csum(line1)}",
+        f"{line2}{compute_csum(line2)}",
+    )
+    if include_title:
+        return (omm["OBJECT_NAME"],) + tle
+    return tle
+
+
+def fortran_format(v: float) -> str:
+    if v == 0:
+        return "00000-0"
+    i = 0
+    while v < 1:
+        v *= 10
+        i += 1
+    i -= 1
+    return f"{round(v * 1e4):5.0f}-{i}"
+
+
+# ambiguous Alpha-5 letters, I and O are not used
+_ALPHA5_LETTERS = string.ascii_uppercase.replace("I", "").replace("O", "")
+_ALPHA5_MAX_ID = 339999
+
+
+def catalog_alpha5(catnum: int) -> str:
+    """Convert a NORAD catalog number to Alpah-5 format so it can be used in a TLE.
+
+    See https://en.wikipedia.org/wiki/Two-line_element_set
+    """
+    if catnum > _ALPHA5_MAX_ID:
+        raise ValueError("Catalog number exceeds maximum for Alpha-5 format")
+    if catnum >= 100000:
+        s = str(catnum)
+        return f"{_ALPHA5_LETTERS[int(s[:-4]) - 10]}{s[-4:]}"
+    return f"{catnum:05d}"
+
+
+def main(doc, catalog_ids, two_le=False):
+    omms = parse_xml(doc)
+    for omm in omms:
+        # Map the catalog if requested
+        omm["NORAD_CAT_ID"] = catalog_ids.get(omm["NORAD_CAT_ID"], omm["NORAD_CAT_ID"])
+        tle = convert_to_tle(omm, include_title=not two_le)
+        print("\n".join(tle))
+
+
+def test():
+    print("*** Input")
+    print(_OMM_XML)
+    print("*** Output")
+    main(_OMM_XML, {}, two_le=False)
+    print()
+    print()
+    print("*** Input")
+    print(_NDM_XML)
+    print("*** Output 2LE")
+    main(_NDM_XML, {25544: 12345}, two_le=True)
+    print()
+    print()
+    print("*** Input")
+    print(_NDM_XML)
+    print("*** Output 3LE")
+    main(_NDM_XML, {}, two_le=False)
+
+    print("*** Test unrepresentable catalog id")
+    try:
+        main(_NDM_XML.replace("25994", "400000"), {}, two_le=False)
+        print("Expected error for unrepresentable catalog id")
+    except ValueError:
+        pass
+
+
+_OMM_XML = """\
+<omm id="CCSDS_OMM_VERS" version="3.0">
+<header>
+  <COMMENT>GENERATED VIA SPACE-TRACK.ORG API</COMMENT>
+  <CREATION_DATE>2025-08-25T21:12:07</CREATION_DATE>
+  <ORIGINATOR>18 SPCS</ORIGINATOR>
+</header>
+<body>
+  <segment>
+    <metadata>
+      <OBJECT_NAME>ISS (ZARYA)</OBJECT_NAME>
+      <OBJECT_ID>1998-067A</OBJECT_ID>
+      <CENTER_NAME>EARTH</CENTER_NAME>
+      <REF_FRAME>TEME</REF_FRAME>
+      <TIME_SYSTEM>UTC</TIME_SYSTEM>
+      <MEAN_ELEMENT_THEORY>SGP4</MEAN_ELEMENT_THEORY>
+    </metadata>
+    <data>
+      <meanElements>
+        <EPOCH>2025-08-25T11:55:44.305248</EPOCH>
+        <MEAN_MOTION>15.50171099</MEAN_MOTION>
+        <ECCENTRICITY>0.00032839</ECCENTRICITY>
+        <INCLINATION>51.6352</INCLINATION>
+        <RA_OF_ASC_NODE>323.5450</RA_OF_ASC_NODE>
+        <ARG_OF_PERICENTER>269.6475</ARG_OF_PERICENTER>
+        <MEAN_ANOMALY>90.4138</MEAN_ANOMALY>
+      </meanElements>
+      <tleParameters>
+        <EPHEMERIS_TYPE>0</EPHEMERIS_TYPE>
+        <CLASSIFICATION_TYPE>U</CLASSIFICATION_TYPE>
+        <NORAD_CAT_ID>25544</NORAD_CAT_ID>
+        <ELEMENT_SET_NO>999</ELEMENT_SET_NO>
+        <REV_AT_EPOCH>52591</REV_AT_EPOCH>
+        <BSTAR>0.00021102933000</BSTAR>
+        <MEAN_MOTION_DOT>0.00011679</MEAN_MOTION_DOT>
+        <MEAN_MOTION_DDOT>0.0000000000000</MEAN_MOTION_DDOT>
+      </tleParameters>
+      <userDefinedParameters>
+        <USER_DEFINED parameter="SEMIMAJOR_AXIS">6794.363</USER_DEFINED>
+        <USER_DEFINED parameter="PERIOD">92.893</USER_DEFINED>
+        <USER_DEFINED parameter="APOAPSIS">418.459</USER_DEFINED>
+        <USER_DEFINED parameter="PERIAPSIS">413.997</USER_DEFINED>
+        <USER_DEFINED parameter="OBJECT_TYPE">PAYLOAD</USER_DEFINED>
+        <USER_DEFINED parameter="RCS_SIZE">LARGE</USER_DEFINED>
+        <USER_DEFINED parameter="COUNTRY_CODE">ISS</USER_DEFINED>
+        <USER_DEFINED parameter="LAUNCH_DATE">1998-11-20</USER_DEFINED>
+        <USER_DEFINED parameter="SITE">TTMTR</USER_DEFINED>
+        <USER_DEFINED parameter="DECAY_DATE"/>
+        <USER_DEFINED parameter="FILE">4820412</USER_DEFINED>
+        <USER_DEFINED parameter="GP_ID">295947618</USER_DEFINED>
+      </userDefinedParameters>
+    </data>
+  </segment>
+</body>
+</omm>
+"""
+
+_NDM_XML = """\
+<?xml version="1.0" encoding="utf-8"?>
+<ndm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://sanaregistry.org/r/ndmxml_unqualified/ndmxml-3.0.0-master-3.0.xsd">
+  <omm id="CCSDS_OMM_VERS" version="3.0">
+    <header>
+      <COMMENT>GENERATED VIA SPACE-TRACK.ORG API</COMMENT>
+      <CREATION_DATE>2025-08-25T21:12:07</CREATION_DATE>
+      <ORIGINATOR>18 SPCS</ORIGINATOR>
+    </header>
+    <body>
+      <segment>
+        <metadata>
+          <OBJECT_NAME>ISS (ZARYA)</OBJECT_NAME>
+          <OBJECT_ID>1998-067A</OBJECT_ID>
+          <CENTER_NAME>EARTH</CENTER_NAME>
+          <REF_FRAME>TEME</REF_FRAME>
+          <TIME_SYSTEM>UTC</TIME_SYSTEM>
+          <MEAN_ELEMENT_THEORY>SGP4</MEAN_ELEMENT_THEORY>
+        </metadata>
+        <data>
+          <meanElements>
+            <EPOCH>2025-08-25T11:55:44.305248</EPOCH>
+            <MEAN_MOTION>15.50171099</MEAN_MOTION>
+            <ECCENTRICITY>0.00032839</ECCENTRICITY>
+            <INCLINATION>51.6352</INCLINATION>
+            <RA_OF_ASC_NODE>323.5450</RA_OF_ASC_NODE>
+            <ARG_OF_PERICENTER>269.6475</ARG_OF_PERICENTER>
+            <MEAN_ANOMALY>90.4138</MEAN_ANOMALY>
+          </meanElements>
+          <tleParameters>
+            <EPHEMERIS_TYPE>0</EPHEMERIS_TYPE>
+            <CLASSIFICATION_TYPE>U</CLASSIFICATION_TYPE>
+            <NORAD_CAT_ID>25544</NORAD_CAT_ID>
+            <ELEMENT_SET_NO>999</ELEMENT_SET_NO>
+            <REV_AT_EPOCH>52591</REV_AT_EPOCH>
+            <BSTAR>0.00021102933000</BSTAR>
+            <MEAN_MOTION_DOT>0.00011679</MEAN_MOTION_DOT>
+            <MEAN_MOTION_DDOT>0.0000000000000</MEAN_MOTION_DDOT>
+          </tleParameters>
+          <userDefinedParameters>
+            <USER_DEFINED parameter="SEMIMAJOR_AXIS">6794.363</USER_DEFINED>
+            <USER_DEFINED parameter="PERIOD">92.893</USER_DEFINED>
+            <USER_DEFINED parameter="APOAPSIS">418.459</USER_DEFINED>
+            <USER_DEFINED parameter="PERIAPSIS">413.997</USER_DEFINED>
+            <USER_DEFINED parameter="OBJECT_TYPE">PAYLOAD</USER_DEFINED>
+            <USER_DEFINED parameter="RCS_SIZE">LARGE</USER_DEFINED>
+            <USER_DEFINED parameter="COUNTRY_CODE">ISS</USER_DEFINED>
+            <USER_DEFINED parameter="LAUNCH_DATE">1998-11-20</USER_DEFINED>
+            <USER_DEFINED parameter="SITE">TTMTR</USER_DEFINED>
+            <USER_DEFINED parameter="DECAY_DATE"/>
+            <USER_DEFINED parameter="FILE">4820412</USER_DEFINED>
+            <USER_DEFINED parameter="GP_ID">295947618</USER_DEFINED>
+          </userDefinedParameters>
+        </data>
+      </segment>
+    </body>
+  </omm>
+  <omm id="CCSDS_OMM_VERS" version="3.0">
+    <header>
+      <COMMENT>GENERATED VIA SPACE-TRACK.ORG API</COMMENT>
+      <CREATION_DATE>2025-08-26T04:03:46</CREATION_DATE>
+      <ORIGINATOR>18 SPCS</ORIGINATOR>
+    </header>
+    <body>
+      <segment>
+        <metadata>
+          <OBJECT_NAME>TERRA</OBJECT_NAME>
+          <OBJECT_ID>1999-068A</OBJECT_ID>
+          <CENTER_NAME>EARTH</CENTER_NAME>
+          <REF_FRAME>TEME</REF_FRAME>
+          <TIME_SYSTEM>UTC</TIME_SYSTEM>
+          <MEAN_ELEMENT_THEORY>SGP4</MEAN_ELEMENT_THEORY>
+        </metadata>
+        <data>
+          <meanElements>
+            <EPOCH>2025-08-25T22:03:03.487968</EPOCH>
+            <MEAN_MOTION>14.60771101</MEAN_MOTION>
+            <ECCENTRICITY>0.00036363</ECCENTRICITY>
+            <INCLINATION>97.9923</INCLINATION>
+            <RA_OF_ASC_NODE>293.4932</RA_OF_ASC_NODE>
+            <ARG_OF_PERICENTER>87.1126</ARG_OF_PERICENTER>
+            <MEAN_ANOMALY>86.6307</MEAN_ANOMALY>
+          </meanElements>
+          <tleParameters>
+            <EPHEMERIS_TYPE>0</EPHEMERIS_TYPE>
+            <CLASSIFICATION_TYPE>U</CLASSIFICATION_TYPE>
+            <NORAD_CAT_ID>25994</NORAD_CAT_ID>
+            <ELEMENT_SET_NO>999</ELEMENT_SET_NO>
+            <REV_AT_EPOCH>36649</REV_AT_EPOCH>
+            <BSTAR>0.00009337752900</BSTAR>
+            <MEAN_MOTION_DOT>0.00000411</MEAN_MOTION_DOT>
+            <MEAN_MOTION_DDOT>0.0000000000000</MEAN_MOTION_DDOT>
+          </tleParameters>
+          <userDefinedParameters>
+            <USER_DEFINED parameter="SEMIMAJOR_AXIS">7068.822</USER_DEFINED>
+            <USER_DEFINED parameter="PERIOD">98.578</USER_DEFINED>
+            <USER_DEFINED parameter="APOAPSIS">693.258</USER_DEFINED>
+            <USER_DEFINED parameter="PERIAPSIS">688.117</USER_DEFINED>
+            <USER_DEFINED parameter="OBJECT_TYPE">PAYLOAD</USER_DEFINED>
+            <USER_DEFINED parameter="RCS_SIZE">LARGE</USER_DEFINED>
+            <USER_DEFINED parameter="COUNTRY_CODE">US</USER_DEFINED>
+            <USER_DEFINED parameter="LAUNCH_DATE">1999-12-18</USER_DEFINED>
+            <USER_DEFINED parameter="SITE">AFWTR</USER_DEFINED>
+            <USER_DEFINED parameter="DECAY_DATE"/>
+            <USER_DEFINED parameter="FILE">4820461</USER_DEFINED>
+            <USER_DEFINED parameter="GP_ID">295977895</USER_DEFINED>
+          </userDefinedParameters>
+        </data>
+      </segment>
+    </body>
+  </omm>
+</ndm>
+"""
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument("--test", action="store_true", help="Run self-test and exit")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "-m",
+        "--map-id",
+        type=str,
+        action="append",
+        help=(
+            "Maps one NORAD catalog to another. This may be necessary if the catalog id is greater "
+            "than 99999 and the default alpha-5 (alphanumeric) format is not desired. "
+            "Values specified here must be in the format <original>=<new>, e.g. 25544=12345. "
+            "Multiple mappings may be specified by repeating this option. "
+        ),
+    )
+    parser.add_argument(
+        "--2le",
+        dest="two_le",
+        action="store_true",
+        help="Output 2LE format rather than 3LE format (with title line)",
+    )
+    parser.add_argument(
+        "-i", "--input", help="Input OMM or NDM XML file. Read from stdin if '-'"
+    )
+    args = parser.parse_args()
+
+    if args.test:
+        test()
+        sys.exit(0)
+
+    if not args.input:
+        parser.error("Missing required argument: --input")
+
+    if args.input == "-":
+        doc = sys.stdin.read()
+    else:
+        doc = open(args.input, "r").read()
+
+    catalog_ids = {}
+    for mapping in args.map_id or []:
+        if "=" not in mapping:
+            parser.error(f"Invalid catalog id mapping: {mapping!r}")
+        orig, new = mapping.split("=", 1)
+        if not orig.isdigit() or not new.isdigit():
+            parser.error(f"Invalid catalog id mapping: {mapping!r}")
+        catalog_ids[int(orig)] = int(new)
+
+    main(doc, catalog_ids, two_le=args.two_le)
