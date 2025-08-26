@@ -4,6 +4,10 @@ A tool to convert CCSDS OMM (Orbit Mean-Elements Message) files to TLE (Two-Line
 
 This tool will work on General Perturbation (GP) OMM files ingested from Space-Track.org or Celestrak.com.
 
+Requires:
+
+  * Python >= 3.6
+
 ## Usage
 ```
 $ ./omm2tle -h
