@@ -2,11 +2,17 @@
 
 A tool to convert CCSDS OMM (Orbit Mean-Elements Message) files to TLE (Two-Line Element) format.
 
-This tool will work on General Perturbation (GP) OMM files ingested from Space-Track.org or Celestrak.com.
+This tool supports OMM XML or NDM (Navigation Data Message) XML files containing one or more 
+OMMs.
 
 Requires:
 
   * Python >= 3.6
+
+References:
+
+  * [CCSDS OMM Specification](https://public.ccsds.org/Pubs/502x0b2c3.pdf)
+  * [TLE Format Description](https://celestrak.com/NORAD/documentation/tle-fmt.php)
 
 ## Usage
 ```
