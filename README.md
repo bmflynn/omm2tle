@@ -12,7 +12,7 @@ Requires:
 References:
 
   * [CCSDS OMM Specification](https://public.ccsds.org/Pubs/502x0b2c3.pdf)
-  * [TLE Format Description](https://celestrak.com/NORAD/documentation/tle-fmt.php)
+  * [TLE Format Description](https://en.wikipedia.org/wiki/Two-line_element_set)
 
 ## Usage
 ```
