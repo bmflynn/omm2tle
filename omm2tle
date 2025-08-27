@@ -68,6 +68,27 @@ TLE_TAGS = (
 def parse_xml(doc):
     """Parse OMM data from OMM XML or NDM XML containing one or more OMMs.
 
+    >>> parse_xml(_OMM_XML)  # doctest: +NORMALIZE_WHITESPACE
+    [{'CCSDS_OMM_VERS': '3.0',
+      'OBJECT_NAME':
+      'ISS (ZARYA)',
+      'EPOCH': datetime.datetime(2025, 8, 25, 11, 55, 44, 305248),
+      'MEAN_MOTION_DOT': 0.00011679,
+      'NORAD_CAT_ID': 25544,
+      'CLASSIFICATION_TYPE': 'U',
+      'OBJECT_ID': '1998-067A',
+      'MEAN_MOTION_DDOT': 0.0,
+      'BSTAR': 0.00021102933,
+      'EPHEMERIS_TYPE': 0,
+      'ELEMENT_SET_NO': 999,
+      'INCLINATION': 51.6352,
+      'RA_OF_ASC_NODE': 323.545,
+      'ECCENTRICITY': 0.00032839,
+      'ARG_OF_PERICENTER': 269.6475,
+      'MEAN_ANOMALY': 90.4138,
+      'MEAN_MOTION': 15.50171099,
+      'REV_AT_EPOCH': 52591}]
+
     Parameters:
         doc: The OMM XML document with root element "omm" or "ndm".
 
@@ -83,7 +104,7 @@ def parse_xml(doc):
     omms = []
     for omm_elem in omm_elems:
         data = {
-            "CCSDS_OMM_VERS": omm_elem.attrib.get("CCSDS_OMM_VERS", None),
+            "CCSDS_OMM_VERS": omm_elem.attrib.get("version", None),
         }
         for tag_name, typfcn in TLE_TAGS:
             val = omm_elem.find(".//%s" % tag_name)
@@ -100,6 +121,11 @@ def compute_csum(line):
 
     See here for documentation: http://celestrak.com/columns/v04n03
 
+    >>> compute_csum("1 43672U 18084B   25236.86653828  .00001713  00000-0  21087-3 0  9990")
+    0
+    >>> compute_csum("2 43672  97.8613 347.3623 0001443  90.0312 270.1068 14.84246564369605")
+    5
+
     Parameters:
         line:
             Complete TLE line1 or line2. Only up to the first 68 chars of line
@@ -114,6 +140,30 @@ def compute_csum(line):
 
 def convert_to_tle(omm: dict, include_title=True):
     """Return the TLE representation of this OMM XML document.
+
+    >>> omm = {'CCSDS_OMM_VERS': '3.0',  # doctest: +NORMALIZE_WHITESPACE
+    ... 'OBJECT_NAME':
+    ... 'ISS (ZARYA)',
+    ... 'EPOCH': datetime(2025, 8, 25, 11, 55, 44, 305248),
+    ... 'MEAN_MOTION_DOT': 0.00011679,
+    ... 'NORAD_CAT_ID': 25544,
+    ... 'CLASSIFICATION_TYPE': 'U',
+    ... 'OBJECT_ID': '1998-067A',
+    ... 'MEAN_MOTION_DDOT': 0.0,
+    ... 'BSTAR': 0.00021102933,
+    ... 'EPHEMERIS_TYPE': 0,
+    ... 'ELEMENT_SET_NO': 999,
+    ... 'INCLINATION': 51.6352,
+    ... 'RA_OF_ASC_NODE': 323.545,
+    ... 'ECCENTRICITY': 0.00032839,
+    ... 'ARG_OF_PERICENTER': 269.6475,
+    ... 'MEAN_ANOMALY': 90.4138,
+    ... 'MEAN_MOTION': 15.50171099,
+    ... 'REV_AT_EPOCH': 52591}
+    >>> convert_to_tle(omm)  # doctest: +NORMALIZE_WHITESPACE
+    ('ISS (ZARYA)',
+     '1 25544U 98067A   25237.49704057  .00011679  00000-0  21103-3 0  9999',
+     '2 25544  51.6352 323.5450 0003284 269.6475  90.4138 15.50171099525917')
 
     Parameters:
         doc: The OMM XML document with root element "omm".
@@ -165,7 +215,15 @@ def convert_to_tle(omm: dict, include_title=True):
     return tle
 
 
-def fortran_format(v: float) -> str:
+def fortran_format(v) -> str:
+    """
+    >>> fortran_format(0.21086801e-3)
+    '21087-3'
+    >>> fortran_format(0.17521546e-3)
+    '17522-3'
+    >>> fortran_format(6.71967e-5)
+    '67197-4'
+    """
     if v == 0:
         return "00000-0"
     i = 0
@@ -185,6 +243,13 @@ def catalog_alpha5(catnum: int) -> str:
     """Convert a NORAD catalog number to Alpah-5 format so it can be used in a TLE.
 
     See https://en.wikipedia.org/wiki/Two-line_element_set
+
+    >>> catalog_alpha5(339999)
+    'Z9999'
+    >>> catalog_alpha5(100000)
+    'A0000'
+    >>> catalog_alpha5(110000)
+    'B0000'
     """
     if catnum > _ALPHA5_MAX_ID:
         raise ValueError("Catalog number exceeds maximum for Alpha-5 format")
@@ -204,29 +269,13 @@ def main(doc, catalog_ids, two_le=False):
 
 
 def test():
-    print("*** Input")
-    print(_OMM_XML)
-    print("*** Output")
-    main(_OMM_XML, {}, two_le=False)
-    print()
-    print()
-    print("*** Input")
-    print(_NDM_XML)
-    print("*** Output 2LE")
-    main(_NDM_XML, {25544: 12345}, two_le=True)
-    print()
-    print()
-    print("*** Input")
-    print(_NDM_XML)
-    print("*** Output 3LE")
-    main(_NDM_XML, {}, two_le=False)
+    import doctest
 
-    print("*** Test unrepresentable catalog id")
-    try:
-        main(_NDM_XML.replace("25994", "400000"), {}, two_le=False)
-        print("Expected error for unrepresentable catalog id")
-    except ValueError:
-        pass
+    (failures, _) = doctest.testmod()
+    if failures:
+        sys.exit(1)
+    else:
+        print("OK")
 
 
 _OMM_XML = """\
