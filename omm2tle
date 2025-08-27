@@ -259,11 +259,12 @@ def catalog_alpha5(catnum: int) -> str:
     return f"{catnum:05d}"
 
 
-def main(doc, catalog_ids, two_le=False):
+def main(doc, map_id, two_le=False):
     omms = parse_xml(doc)
     for omm in omms:
         # Map the catalog if requested
-        omm["NORAD_CAT_ID"] = catalog_ids.get(omm["NORAD_CAT_ID"], omm["NORAD_CAT_ID"])
+        if omm["NORAD_CAT_ID"] > 99999 and map_id is not None:
+            omm["NORAD_CAT_ID"] = map_id
         tle = convert_to_tle(omm, include_title=not two_le)
         print("\n".join(tle))
 
@@ -457,17 +458,13 @@ if __name__ == "__main__":
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("--test", action="store_true", help="Run self-test and exit")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
+    parser.add_argument(
         "-m",
-        "--map-id",
-        type=str,
-        action="append",
+        "--map",
+        type=int,
         help=(
-            "Maps one NORAD catalog to another. This may be necessary if the catalog id is greater "
-            "than 99999 and the default alpha-5 (alphanumeric) format is not desired. "
-            "Values specified here must be in the format <original>=<new>, e.g. 25544=12345. "
-            "Multiple mappings may be specified by repeating this option. "
+            "Map any NORAD catalog ids > 99999 to this value. This may be useful if the default "
+            "alpha-5 (alphanumeric) format is not desired. "
         ),
     )
     parser.add_argument(
@@ -493,13 +490,4 @@ if __name__ == "__main__":
     else:
         doc = open(args.input, "r").read()
 
-    catalog_ids = {}
-    for mapping in args.map_id or []:
-        if "=" not in mapping:
-            parser.error(f"Invalid catalog id mapping: {mapping!r}")
-        orig, new = mapping.split("=", 1)
-        if not orig.isdigit() or not new.isdigit():
-            parser.error(f"Invalid catalog id mapping: {mapping!r}")
-        catalog_ids[int(orig)] = int(new)
-
-    main(doc, catalog_ids, two_le=args.two_le)
+    main(doc, map_id=args.map, two_le=args.two_le)

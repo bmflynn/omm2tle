@@ -17,20 +17,19 @@ References:
 ## Usage
 ```
 $ ./omm2tle -h
-usage: omm2tle [-h] [--test] [-m MAP_ID] [--2le] [-i INPUT]
+usage: omm2tle [-h] [--test] [-m MAP] [--2le] [-i INPUT]
 
 Convert CCSDS Orbital Mean Message (OMM) XML to Two-Line Element (TLE) format.
 
-See https://public.ccsds.org/Pubs/502x0b2c3.pdf for the OMM specification.
+Project: https://github.com/bmflynn/omm2tle
 
 options:
   -h, --help            show this help message and exit
   --test                Run self-test and exit
-  -m MAP_ID, --map-id MAP_ID
-                        Maps one NORAD catalog to another. This may be necessary if the catalog id is greater than 99999 and the default alpha-5 (alphanumeric) format is not desired. Values specified here must be in the format <original>=<new>, e.g. 25544=12345. Multiple mappings may be specified by repeating this option.
+  -m MAP, --map MAP     Map any NORAD catalog ids > 99999 to this value. This may be useful if the default alpha-5 (alphanumeric) format is not desired.
   --2le                 Output 2LE format rather than 3LE format (with title line)
   -i INPUT, --input INPUT
-                        Input OMM or NDM XML file. Read from stdin if '-'`sh
+                        Input OMM or NDM XML file. Read from stdin if '-'
 ```
 
 ## License 
